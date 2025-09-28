@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Tone from "tone";
+// GitHub Pages-safe background asset import (Vite will prefix with correct base)
+import bg from "/bg.jpg";
 
 // ===== Helpers
 const degToRad = (d) => (d * Math.PI) / 180;
@@ -53,6 +55,9 @@ const PLANETS = [
   { key: "MC", glyph: "MC", deg: 78.8, instrument: "lead" },
 ];
 
+// Keep a copy of the original planet->instrument mapping for hard reset
+const ORIGINAL_INSTRUMENTS = Object.fromEntries(PLANETS.map(p => [p.key, p.instrument]));
+
 // ===== Scale (bright & safe)
 const SCALE = [
   "G3","A3","B3","D4","E4",
@@ -79,126 +84,98 @@ const SOUND_LIBRARY = [
 ];
 
 export default function AstroSonar() {
-  // ---------- UI State
+  // --- UI state
   const [running, setRunning] = useState(false);
-  const [bpm, setBpm] = useState(60); // start at 60, user can go to 180
+  const [bpm, setBpm] = useState(60); // 60..180
   const tempo = useMemo(() => 360 * (bpm / 60), [bpm]); // deg/sec
   const [angle, setAngle] = useState(0);
 
-  // ---------- Animation
+  // --- FX single sliders (wet only)
+  const [distWet, setDistWet] = useState(0.15);
+  const [filtWet, setFiltWet] = useState(0.10);
+  const [delWet, setDelWet] = useState(0.18);
+  const [revWet, setRevWet] = useState(0.12);
+
+  // --- animation/time
   const rafRef = useRef(null);
   const baseTimeRef = useRef(null);
   const baseAngleRef = useRef(0);
   const prevAngleRef = useRef(0);
 
-  // ---------- Audio Graph Refs
+  // --- audio graph
   const builtRef = useRef(false);
   const mixRef = useRef(null);
-  const reverbRef = useRef(null);
-  const delayRef = useRef(null);
-  const distortionRef = useRef(null);
-  const autoFilterRef = useRef(null);
-  const compressorRef = useRef(null);
-  const lpfRef = useRef(null);
-  const hpfRef = useRef(null);
   const masterRef = useRef(null);
   const gainsRef = useRef({});
-  // synthsRef structure: { [planetKey]: { current: soundKey, nodes: { [soundKey]: ToneInstrument } } }
+  const distortionRef = useRef(null);
+  const autoFilterRef = useRef(null);
+  const delayRef = useRef(null);
+  const reverbRef = useRef(null);
+
+  // per-planet instrument slot: { current: 'lead', nodes: { [key]: synth } }
   const synthsRef = useRef({});
   const instrumentMap = useRef(Object.fromEntries(PLANETS.map(p => [p.key, p.instrument])));
-  const [, forceRerender] = useState(0);
+  const [, force] = useState(0);
 
-  // ---------- Self-tests (dev sanity checks)
-  useEffect(() => {
-    const keys = SOUND_LIBRARY.map(s => s.key);
-    console.assert(new Set(keys).size === keys.length, "SOUND_LIBRARY keys must be unique");
-    const planetKeys = PLANETS.map(p => p.key);
-    console.assert(new Set(planetKeys).size === planetKeys.length, "PLANETS keys must be unique");
-    PLANETS.forEach(p => console.assert(keys.includes(p.instrument), `Default instrument for ${p.key} not in SOUND_LIBRARY`));
-  }, []);
-
-  // ---------- Instrument Builders (all audible at default settings)
+  // build simple synths that are audible & safe in Tone v15 core
   const makeSynth = (kind) => {
-    const has = (c) => typeof c === "function";
     switch (kind) {
-      case "kick": return has(Tone.MembraneSynth)
-        ? new Tone.MembraneSynth({ octaves: 2, pitchDecay: 0.03, envelope:{attack:0.001,decay:0.16,sustain:0,release:0.08}, volume:-2 })
-        : new Tone.MonoSynth({ oscillator:{type:"sine"}, envelope:{attack:0.001,decay:0.12,sustain:0,release:0.08}, volume:-2 });
-      case "snare": return has(Tone.NoiseSynth)
-        ? new Tone.NoiseSynth({ envelope:{attack:0.001,decay:0.12,sustain:0,release:0.05}, volume:-4 })
-        : new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.001,decay:0.08,sustain:0,release:0.05}, volume:-4 });
-      case "clap": return has(Tone.NoiseSynth)
-        ? new Tone.NoiseSynth({ noise:{type:"white"}, envelope:{attack:0.001,decay:0.09,sustain:0,release:0.02}, volume:-6 })
-        : new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.001,decay:0.06,sustain:0,release:0.02}, volume:-6 });
-      case "hat": return has(Tone.NoiseSynth)
-        ? new Tone.NoiseSynth({ envelope:{attack:0.001, decay:0.02, sustain:0, release:0.015}, volume:-8 })
-        : new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.001,decay:0.02,sustain:0,release:0.015}, volume:-8 });
-      case "tom": return has(Tone.MembraneSynth)
-        ? new Tone.MembraneSynth({ octaves: 1.5, pitchDecay: 0.01, envelope:{attack:0.001,decay:0.1,sustain:0,release:0.08}, volume:-4 })
-        : new Tone.MonoSynth({ oscillator:{type:"sine"}, envelope:{attack:0.001,decay:0.08,sustain:0,release:0.07}, volume:-4 });
-      case "bass": return has(Tone.MonoSynth)
-        ? new Tone.MonoSynth({ oscillator:{type:"square"}, filter:{type:"lowpass", Q:8}, envelope:{attack:0.003,decay:0.1,sustain:0.6,release:0.1}, filterEnvelope:{attack:0.002,decay:0.08,sustain:0.3,release:0.08,baseFrequency:110,octaves:2}, volume:-6 })
-        : new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.005,decay:0.12,sustain:0.5,release:0.1}, volume:-6 });
-      case "lead": return new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.003,decay:0.1,sustain:0.25,release:0.1}, volume:-6 });
-      case "arp": return has(Tone.AMSynth)
-        ? new Tone.AMSynth({ oscillator:{type:"square"}, envelope:{attack:0.002,decay:0.08,sustain:0.2,release:0.08}, volume:-8 })
-        : new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.002,decay:0.08,sustain:0.2,release:0.08}, volume:-8 });
-      case "pad": return new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.01,decay:0.1,sustain:0.3,release:0.2}, volume:-10 });
-      case "bell": return has(Tone.FMSynth)
-        ? new Tone.FMSynth({ harmonicity:6, modulationIndex:140, oscillator:{type:"sine"}, modulation:{type:"square"}, envelope:{attack:0.002,decay:0.45,sustain:0,release:0.18}, volume:-8 })
-        : new Tone.Synth({ oscillator:{type:"sine"}, envelope:{attack:0.002,decay:0.4,sustain:0,release:0.2}, volume:-8 });
-      case "pluck": return has(Tone.PluckSynth)
-        ? new Tone.PluckSynth({ attackNoise: 0.6, dampening: 5000, resonance: 0.6 })
-        : new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.001,decay:0.08,sustain:0,release:0.05}, volume:-8 });
-      case "pulse": return has(Tone.PWMSynth)
-        ? new Tone.PWMSynth({ envelope:{attack:0.002,decay:0.08,sustain:0.25,release:0.08}, modulationFrequency: 6, volume:-6 })
-        : new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.002,decay:0.08,sustain:0.25,release:0.08}, volume:-6 });
-      case "blip": return new Tone.Synth({ oscillator:{type:"sine"}, envelope:{attack:0.001,decay:0.05,sustain:0,release:0.03}, volume:-8 });
+      case "kick": return new Tone.MembraneSynth({ octaves: 3, pitchDecay: 0.06, envelope:{attack:0.001,decay:0.18,sustain:0,release:0.12}, volume:-1 });
+      case "snare": return new Tone.NoiseSynth({ envelope:{attack:0.001,decay:0.12,sustain:0,release:0.05}, volume:-2 });
+      case "clap": return new Tone.NoiseSynth({ envelope:{attack:0.001,decay:0.08,sustain:0,release:0.03}, volume:-3 });
+      case "hat": return new Tone.NoiseSynth({ envelope:{attack:0.001,decay:0.02,sustain:0,release:0.015}, volume:-6 });
+      case "tom": return new Tone.MembraneSynth({ octaves: 2, pitchDecay: 0.02, envelope:{attack:0.001,decay:0.12,sustain:0,release:0.1}, volume:-2 });
+      case "bass": return new Tone.MonoSynth({ oscillator:{type:"square"}, envelope:{attack:0.003,decay:0.1,sustain:0.7,release:0.12}, volume:-2 });
+      case "lead": return new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.003,decay:0.1,sustain:0.28,release:0.12}, volume:-3 });
+      case "arp": return new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.002,decay:0.08,sustain:0.25,release:0.09}, volume:-4 });
+      case "pad": return new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.01,decay:0.1,sustain:0.35,release:0.25}, volume:-6 });
+      case "bell": return new Tone.Synth({ oscillator:{type:"sine"}, envelope:{attack:0.002,decay:0.4,sustain:0,release:0.22}, volume:-4 });
+      case "pluck": return new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.001,decay:0.08,sustain:0,release:0.05}, volume:-4 });
+      case "pulse": return new Tone.Synth({ oscillator:{type:"square"}, envelope:{attack:0.002,decay:0.08,sustain:0.28,release:0.09}, volume:-3 });
+      case "blip": return new Tone.Synth({ oscillator:{type:"sine"}, envelope:{attack:0.001,decay:0.05,sustain:0,release:0.03}, volume:-4 });
       default: return new Tone.Synth();
     }
   };
 
-  // ---------- Build Audio Graph
   const buildGraph = () => {
     if (builtRef.current) return;
 
-    // Base nodes
     const mix = new Tone.Gain(1);
     const master = new Tone.Gain(1);
 
-    // Feature-detect Tone v15+ classes; only create what exists in this build
-    const distortion = Tone?.Distortion ? new Tone.Distortion({ distortion: 0.2, wet: 0.15 }) : null;
-    const autoFilter = Tone?.AutoFilter ? new Tone.AutoFilter({ frequency: 1.5, baseFrequency: 200, octaves: 3, type: "sine", wet: 0.1 }).start() : null;
-    const feedbackDelay = Tone?.FeedbackDelay ? new Tone.FeedbackDelay({ delayTime: "3n", feedback: 0.25, wet: 0.18 }) : (Tone?.Delay ? new Tone.Delay("3n") : null);
-    const reverb = Tone?.Reverb ? new Tone.Reverb({ decay: 2.5, preDelay: 0.01, wet: 0.12 }) : null;
-    const hpf = Tone?.Filter ? new Tone.Filter(40, "highpass") : null;
-    const lpf = Tone?.Filter ? new Tone.Filter(16000, "lowpass") : null;
-    const compressor = Tone?.Compressor ? new Tone.Compressor({ threshold: -12, ratio: 12, attack: 0.003, release: 0.25 }) : null;
+    // core-safe FX (feature-detected)
+    const distortion = Tone?.Distortion ? new Tone.Distortion() : null;
+    const autoFilter = Tone?.AutoFilter ? new Tone.AutoFilter({ frequency: 1.5, baseFrequency: 200, octaves: 3, type: "sine" }).start() : null;
+    const feedbackDelay = Tone?.FeedbackDelay ? new Tone.FeedbackDelay({ delayTime: "3n", feedback: 0.25 }) : (Tone?.Delay ? new Tone.Delay("3n") : null);
+    const reverb = Tone?.Reverb ? new Tone.Reverb({ decay: 2.5, preDelay: 0.01 }) : null;
 
-    // Wire chain safely: mix -> [fx that exist...] -> master -> destination
+    // initial wets
+    if (distortion?.wet) distortion.wet.value = distWet;
+    if (autoFilter?.wet) autoFilter.wet.value = filtWet;
+    if (feedbackDelay?.wet) feedbackDelay.wet.value = delWet;
+    if (reverb?.wet) reverb.wet.value = revWet;
+
+    // chain: mix -> [fx exist?] -> master -> destination
     let last = mix;
     const add = (node, ref) => { if (!node) return; last.connect(node); last = node; if (ref) ref.current = node; };
-
     add(distortion, distortionRef);
     add(autoFilter, autoFilterRef);
     add(feedbackDelay, delayRef);
     add(reverb, reverbRef);
-    add(hpf, hpfRef);
-    add(lpf, lpfRef);
-    add(compressor, compressorRef);
     last.connect(master);
 
-    const destination = Tone.getDestination ? Tone.getDestination() : Tone.Destination;
-    master.connect(destination);
+    const destination = (Tone.getDestination && Tone.getDestination()) || Tone.Destination || Tone.getContext?.().destination;
+    if (destination) master.connect(destination);
 
-    mixRef.current = mix;
-    masterRef.current = master;
+    mixRef.current = mix; masterRef.current = master;
 
+    // per-planet gains + prebuilt synth nodes (for glitch-free swapping)
     const gains = {}; const synths = {};
-    PLANETS.forEach((p) => {
-      const g = new Tone.Gain(1).connect(mix);
+    PLANETS.forEach(p => {
+      const g = new Tone.Gain(1);
+      g.connect(mix);
+      g.connect(master); // bypass path -> guarantees sound
       const nodes = {};
-      // Prebuild one node per library instrument for glitch-free swaps
       SOUND_LIBRARY.forEach(({ key }) => {
         const node = makeSynth(key);
         node.connect(g);
@@ -207,34 +184,27 @@ export default function AstroSonar() {
       gains[p.key] = g;
       synths[p.key] = { current: instrumentMap.current[p.key], nodes };
     });
-
     gainsRef.current = gains; synthsRef.current = synths;
+
     builtRef.current = true;
   };
 
-  // ---------- Dispose
   const disposeGraph = () => {
     if (!builtRef.current) return;
-    Object.values(synthsRef.current).forEach((slot) => {
-      Object.values(slot.nodes).forEach((n) => n?.dispose?.());
-    });
-    Object.values(gainsRef.current).forEach((g) => g.dispose?.());
-    reverbRef.current?.dispose?.();
-    delayRef.current?.dispose?.();
-    autoFilterRef.current?.dispose?.();
+    Object.values(synthsRef.current).forEach(slot => Object.values(slot.nodes).forEach(n => n?.dispose?.()));
+    Object.values(gainsRef.current).forEach(g => g.dispose?.());
     distortionRef.current?.dispose?.();
-    compressorRef.current?.dispose?.();
-    lpfRef.current?.dispose?.();
-    hpfRef.current?.dispose?.();
+    autoFilterRef.current?.dispose?.();
+    delayRef.current?.dispose?.();
+    reverbRef.current?.dispose?.();
     masterRef.current?.dispose?.();
     mixRef.current?.dispose?.();
     synthsRef.current = {}; gainsRef.current = {};
     builtRef.current = false;
   };
-
   useEffect(() => () => disposeGraph(), []);
 
-  // ---------- Animation loop (no hit-orb; exact crossings)
+  // animation loop
   useEffect(() => {
     if (!running) { if (rafRef.current) cancelAnimationFrame(rafRef.current); return; }
     const loop = (ts) => {
@@ -244,9 +214,7 @@ export default function AstroSonar() {
       const prev = prevAngleRef.current;
 
       if (builtRef.current) {
-        PLANETS.forEach((p, idx) => {
-          if (crossed(prev, curr, p.deg)) triggerPlanet(p, idx);
-        });
+        PLANETS.forEach((p, idx) => { if (crossed(prev, curr, p.deg)) triggerPlanet(p, idx); });
       }
 
       prevAngleRef.current = curr;
@@ -257,15 +225,12 @@ export default function AstroSonar() {
     return () => rafRef.current && cancelAnimationFrame(rafRef.current);
   }, [running, tempo]);
 
-  // ---------- Trigger logic
   const triggerPlanet = (p, idx) => {
-    if (!builtRef.current) return;
     const slot = synthsRef.current[p.key];
     if (!slot) return;
     const node = slot.nodes[slot.current];
     if (!node) return;
     const t = Tone.now();
-
     const note = pick((idx * 3) % SCALE.length);
 
     switch (slot.current) {
@@ -286,17 +251,16 @@ export default function AstroSonar() {
     }
   };
 
-  // ---------- Controls
   const handlePlayPause = async () => {
     if (!running) {
-      console.log("[AstroSonar] Play clicked");
-      await Tone.start(); // unlock audio context first
+      await Tone.start();
       buildGraph();
+      // tiny test beep so you know audio path is alive
+      new Tone.Synth().toDestination().triggerAttackRelease("A4", "16n", Tone.now() + 0.05);
       baseTimeRef.current = null;
       prevAngleRef.current = baseAngleRef.current;
       setRunning(true);
     } else {
-      console.log("[AstroSonar] Pause clicked");
       baseAngleRef.current = angle;
       setRunning(false);
     }
@@ -306,17 +270,36 @@ export default function AstroSonar() {
     baseAngleRef.current = 0;
     prevAngleRef.current = 0;
     setAngle(0);
-    baseTimeRef.current = null;
+    setBpm(60);
+
+    instrumentMap.current = { ...ORIGINAL_INSTRUMENTS };
+    Object.keys(synthsRef.current || {}).forEach(k => { if (synthsRef.current[k]) synthsRef.current[k].current = ORIGINAL_INSTRUMENTS[k]; });
+
+    const d=0.15,f=0.10,l=0.18,r=0.12;
+    setDistWet(d); setFiltWet(f); setDelWet(l); setRevWet(r);
+    if (distortionRef.current?.wet) distortionRef.current.wet.value = d;
+    if (autoFilterRef.current?.wet) autoFilterRef.current.wet.value = f;
+    if (delayRef.current?.wet) delayRef.current.wet.value = l;
+    if (reverbRef.current?.wet) reverbRef.current.wet.value = r;
+
+    if (!builtRef.current) buildGraph();
+    if (running) { baseTimeRef.current = null; prevAngleRef.current = baseAngleRef.current; }
   };
 
   const tempoBadge = (x) => x === 60 ? "MEDITATE" : (x >= 100 && x <= 150 ? "WORK BITCH!" : (x >= 160 ? "RAVE!" : "FLOW"));
   const tempoColor = (x) => (x <= 90 ? "#39FF14" : x <= 150 ? "#f59e0b" : "#ef4444");
 
   return (
-    <div style={{background:"black", color:"#39FF14", minHeight:"100vh", padding:20}}>
+    <div style={{
+      backgroundImage:`url(${bg})`,
+      backgroundSize:"cover",
+      backgroundPosition:"center",
+      color:"#39FF14",
+      minHeight:"100vh",
+      padding:20
+    }}>
       <h1 style={{textAlign:"center", fontSize:32, marginBottom:20}}>REMIX ME</h1>
 
-      {/* Transport + Global FX */}
       <div style={{display:"flex", gap:12, marginBottom:12, alignItems:"center", flexWrap:"wrap"}}>
         <button onClick={handlePlayPause}>{running ? "Pause" : "Play"}</button>
         <button onClick={reset}>Reset</button>
@@ -325,67 +308,38 @@ export default function AstroSonar() {
           <input type="range" min={60} max={180} step={1} value={bpm} onChange={(e)=>setBpm(parseInt(e.target.value))} />
         </div>
         <div style={{background:tempoColor(bpm), color:"#000", padding:"4px 8px", borderRadius:999, fontWeight:800}}>{tempoBadge(bpm)}</div>
-
-        {/* Distortion */}
-        <div style={{display:"flex", gap:8, alignItems:"center"}}>
-          <small>Distortion</small>
-          <input type="range" min={0} max={1} step={0.01} defaultValue={0.2} onChange={(e)=> distortionRef.current && (distortionRef.current.distortion = parseFloat(e.target.value))} />
-          <input type="range" min={0} max={1} step={0.01} defaultValue={0.15} onChange={(e)=> distortionRef.current && (distortionRef.current.wet.value = parseFloat(e.target.value))} />
-        </div>
-        {/* Filter LFO */}
-        <div style={{display:"flex", gap:8, alignItems:"center"}}>
-          <small>Filter LFO</small>
-          <input type="range" min={0} max={1} step={0.01} defaultValue={0.10} onChange={(e)=> autoFilterRef.current && (autoFilterRef.current.wet.value = parseFloat(e.target.value))} />
-          <input type="range" min={0.1} max={8} step={0.1} defaultValue={1.5} onChange={(e)=> autoFilterRef.current && (autoFilterRef.current.frequency.value = parseFloat(e.target.value))} />
-        </div>
-        {/* Delay */}
-        <div style={{display:"flex", gap:8, alignItems:"center"}}>
-          <small>Delay</small>
-          <input type="range" min={0} max={1} step={0.01} defaultValue={0.18} onChange={(e)=> delayRef.current && (delayRef.current.wet.value = parseFloat(e.target.value))} />
-          <input type="range" min={0} max={0.9} step={0.01} defaultValue={0.25} onChange={(e)=> delayRef.current && (delayRef.current.feedback.value = parseFloat(e.target.value))} />
-        </div>
-        {/* Reverb */}
-        <div style={{display:"flex", gap:8, alignItems:"center"}}>
-          <small>Reverb</small>
-          <input type="range" min={0} max={1} step={0.01} defaultValue={0.12} onChange={(e)=> reverbRef.current && (reverbRef.current.wet.value = parseFloat(e.target.value))} />
-          <input type="range" min={0.1} max={0.95} step={0.01} defaultValue={0.45} onChange={(e)=> reverbRef.current && (reverbRef.current.decay = parseFloat(e.target.value))} />
-        </div>
-        {/* Filters */}
-        <div style={{display:"flex", gap:8, alignItems:"center"}}>
-          <small>HPF</small>
-          <input type="range" min={20} max={400} step={1} defaultValue={40} onChange={(e)=> hpfRef.current && (hpfRef.current.frequency.value = parseFloat(e.target.value))} />
-          <small>LPF</small>
-          <input type="range" min={2000} max={20000} step={100} defaultValue={16000} onChange={(e)=> lpfRef.current && (lpfRef.current.frequency.value = parseFloat(e.target.value))} />
-        </div>
       </div>
 
-      {/* Instrument routing panel */}
-      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))", gap:12, marginBottom:12}}>
-        {PLANETS.map((p)=> (
-          <div key={p.key} style={{border:"1px solid #1f2937", borderRadius:12, padding:10, background:"#0b0b0b"}}>
-            <div style={{display:"flex", justifyContent:"space-between", marginBottom:6}}>
-              <strong>{p.glyph} {p.key}</strong>
-              <span style={{opacity:0.7}}>@{Math.round(p.deg)}°</span>
-            </div>
-            <select
-              value={(synthsRef.current[p.key]?.current) || instrumentMap.current[p.key]}
-              onChange={(e)=>{
-                const val = e.target.value;
-                instrumentMap.current[p.key] = val;
-                if (synthsRef.current[p.key]) {
-                  synthsRef.current[p.key].current = val; // instant, glitch-free swap (all nodes prewired)
-                }
-                forceRerender(x=>x+1);
-              }}
-              style={{width:"100%", background:"#111", color:"#39FF14", padding:6, borderRadius:8}}
-            >
-              {SOUND_LIBRARY.map(s=> <option key={s.key} value={s.key}>{s.label}</option>)}
-            </select>
-          </div>
-        ))}
+      {/* FX — one slider each (wet only) */}
+      <div style={{display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:10}}>
+        <Control label="Distortion">
+          <input type="range" min={0} max={1} step={0.01} value={distWet}
+            onChange={(e)=>{ const v=parseFloat(e.target.value); setDistWet(v); if(distortionRef.current?.wet){distortionRef.current.wet.value=v;} }} />
+        </Control>
+        <Control label="Filter">
+          <input type="range" min={0} max={1} step={0.01} value={filtWet}
+            onChange={(e)=>{ const v=parseFloat(e.target.value); setFiltWet(v); if(autoFilterRef.current?.wet){autoFilterRef.current.wet.value=v;} }} />
+        </Control>
+        <Control label="Delay">
+          <input type="range" min={0} max={1} step={0.01} value={delWet}
+            onChange={(e)=>{ const v=parseFloat(e.target.value); setDelWet(v); if(delayRef.current?.wet){delayRef.current.wet.value=v;} }} />
+        </Control>
+        <Control label="Reverb">
+          <input type="range" min={0} max={1} step={0.01} value={revWet}
+            onChange={(e)=>{ const v=parseFloat(e.target.value); setRevWet(v); if(reverbRef.current?.wet){reverbRef.current.wet.value=v;} }} />
+        </Control>
       </div>
 
       <Scene angle={angle} />
+    </div>
+  );
+}
+
+function Control({ label, children }) {
+  return (
+    <div style={{display:"flex", gap:8, alignItems:"center"}}>
+      <small style={{width:70, display:"inline-block"}}>{label}</small>
+      {children}
     </div>
   );
 }
@@ -400,14 +354,13 @@ function Scene({ angle }) {
   const toXY = (deg, rad) => { const a = degToRad(-deg + 90); return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)]; };
 
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} style={{width:"100%", height:520, background:"#000"}}>
+    <svg viewBox={`0 0 ${size} ${size}`} style={{width:"100%", height:520}}>
       {/* outer ring */}
       <circle cx={cx} cy={cy} r={r} fill="none" stroke={neon} strokeWidth={2}/>
 
-      {/* zodiac glyphs — visible only in the active wedge (intentional) */}
+      {/* zodiac glyphs — highlighted only in the active wedge */}
       {SIGNS.map((s)=>{
-        const distRaw = Math.abs(wrapDeg(angle) - wrapDeg(s.deg));
-        const dist = Math.min(distRaw, 360 - distRaw);
+        const dist = Math.min(Math.abs(wrapDeg(angle) - s.deg), 360 - Math.abs(wrapDeg(angle) - s.deg));
         const within = dist <= wedgeWidth/2;
         const [gx, gy] = toXY(s.deg, r+30);
         const fs = within ? 22 : 14;
@@ -431,7 +384,7 @@ function Scene({ angle }) {
         );
       })}
 
-      {/* visual wedge */}
+      {/* sonar wedge */}
       {(() => {
         const a1 = angle - wedgeWidth/2;
         const a2 = angle + wedgeWidth/2;
