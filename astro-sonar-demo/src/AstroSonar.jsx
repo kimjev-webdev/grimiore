@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Tone from "tone";
 // GitHub Pages-safe background asset import (Vite will prefix with correct base)
-import bg from "/bg.jpg";
+import bg from "./assets/bg.jpg";
 
 // ===== Helpers
 const degToRad = (d) => (d * Math.PI) / 180;
