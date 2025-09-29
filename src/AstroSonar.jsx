@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Tone from "tone";
-// Background asset (bundled) — safe for GitHub Pages
-import bg from "./assets/bg.jpg";
+import bg from "./assets/bg.png";
 
 // ===== Helpers
 const degToRad = (d) => (d * Math.PI) / 180;
@@ -14,7 +13,7 @@ const crossed = (prev, curr, target) => {
   return target > prev || target <= curr;
 };
 
-// ===== Signs & Houses
+// ===== Signs (static glyph ring)
 const SIGNS = [
   { key: "Aries", glyph: "♈", deg: 0 },
   { key: "Taurus", glyph: "♉", deg: 30 },
@@ -28,13 +27,6 @@ const SIGNS = [
   { key: "Capricorn", glyph: "♑", deg: 270 },
   { key: "Aquarius", glyph: "♒", deg: 300 },
   { key: "Pisces", glyph: "♓", deg: 330 },
-];
-
-const HOUSES = [
-  { key: "I", deg: 0 }, { key: "II", deg: 30 }, { key: "III", deg: 60 },
-  { key: "IV", deg: 90 }, { key: "V", deg: 120 }, { key: "VI", deg: 150 },
-  { key: "VII", deg: 180 }, { key: "VIII", deg: 210 }, { key: "IX", deg: 240 },
-  { key: "X", deg: 270 }, { key: "XI", deg: 300 }, { key: "XII", deg: 330 },
 ];
 
 // ===== Planets (fixed degrees) + euphoric chiptune defaults
@@ -83,16 +75,46 @@ const SOUND_LIBRARY = [
   { key: "blip", label: "Blip (game coin)" },
 ];
 
-// Easy knobs for background alignment/size
-const BG_SIZE_PX = 765; // shrink or grow the bg image around the circle
-const BG_POS = "center"; // e.g. "center 48%" to nudge down a touch
-
 export default function AstroSonar() {
   // --- UI state
   const [running, setRunning] = useState(false);
   const [bpm, setBpm] = useState(60); // 60..180
   const tempo = useMemo(() => 360 * (bpm / 60), [bpm]); // deg/sec
   const [angle, setAngle] = useState(0);
+
+  // --- refs used by animation/css variables
+  const appRef = useRef(null);
+
+  // === Drive background rotation & hue from BPM (CSS variables)
+  useEffect(() => {
+    const spb = 60 / bpm; // seconds per beat
+    const rotDur = `${4 * spb}s`; // 1 rotation per bar
+    const hueDur = `${8 * spb}s`; // 1 hue cycle per 2 bars
+    const el = appRef.current || document.documentElement;
+    el.style.setProperty('--bg-rot-dur', rotDur);
+    el.style.setProperty('--bg-hue-dur', hueDur);
+  }, [bpm]);
+
+  // === Pause/resume background animation with transport state
+  useEffect(() => {
+    const el = appRef.current || document.documentElement;
+    el.style.setProperty('--bg-anim-state', running ? 'running' : 'paused');
+  }, [running]);
+
+  // === Set background image URL for CSS (::before layer)
+  useEffect(() => {
+    const el = appRef.current || document.documentElement;
+    // Vite will resolve this import to the built asset URL
+    el.style.setProperty('--bg-url', `url(${bg})`);
+  }, []);
+
+  // === Houses anchored to Ascendant (Equal House)
+  const ascDeg = useMemo(() => {
+    const asc = PLANETS.find(p => p.key === "Asc");
+    return asc ? asc.deg : 0;
+  }, []);
+  const ROMAN = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"];
+  const houses = useMemo(() => Array.from({ length: 12 }, (_, i) => ({ key: ROMAN[i], deg: wrapDeg(ascDeg + i * 30) })), [ascDeg]);
 
   // --- FX single sliders (wet only)
   const [distWet, setDistWet] = useState(0.15);
@@ -258,7 +280,6 @@ export default function AstroSonar() {
     if (!running) {
       await Tone.start();
       buildGraph();
-      // tiny test beep so you know audio path is alive
       new Tone.Synth().toDestination().triggerAttackRelease("A4", "16n", Tone.now() + 0.05);
       baseTimeRef.current = null;
       prevAngleRef.current = baseAngleRef.current;
@@ -289,30 +310,25 @@ export default function AstroSonar() {
     if (running) { baseTimeRef.current = null; prevAngleRef.current = baseAngleRef.current; }
   };
 
-  const tempoBadge = (x) => x === 60 ? "MEDITATE" : (x >= 100 && x <= 150 ? "WORK BITCH!" : (x >= 160 ? "RAVE!" : "FLOW"));
-  const tempoColor = (x) => (x <= 90 ? "#39FF14" : x <= 150 ? "#f59e0b" : "#ef4444");
+  const tempoBadge = (x) => x === 60 ? "MEDITATE" : (x >= 100 && x <= 150 ? "WORK BITCH!" : (x >= 160 ? "BURNOUT" : "SLOW DOWN!"));
+  const badgeClass = (x) => (x <= 90 ? "flow" : x <= 150 ? "work" : "rave");
 
   return (
-    <div style={{
-      background: "#000",
-      color: "#39FF14",
-      minHeight: "100vh",
-      padding: 20
-    }}>
-      <h1 style={{textAlign:"center", fontSize:32, marginBottom:20}}>REMIX ME</h1>
+    <div className="app" ref={appRef}>
+      <h1 className="title">How can I find myself?</h1>
 
-      <div style={{display:"flex", gap:12, marginBottom:12, alignItems:"center", flexWrap:"wrap"}}>
-        <button onClick={handlePlayPause}>{running ? "Pause" : "Play"}</button>
-        <button onClick={reset}>Reset</button>
-        <div style={{marginLeft:16, minWidth:260, flex:1}}>
+      <div className="controls">
+        <button className="button" onClick={handlePlayPause}>{running ? "Pause" : "Play"}</button>
+        <button className="button" onClick={reset}>Reset</button>
+        <div className="tempo-wrap">
           <label>Tempo {bpm} BPM</label>
           <input type="range" min={60} max={180} step={1} value={bpm} onChange={(e)=>setBpm(parseInt(e.target.value))} />
         </div>
-        <div style={{background:tempoColor(bpm), color:"#000", padding:"4px 8px", borderRadius:999, fontWeight:800}}>{tempoBadge(bpm)}</div>
+        <div className={`tempo-badge ${badgeClass(bpm)}`}>{tempoBadge(bpm)}</div>
       </div>
 
       {/* FX — one slider each (wet only) */}
-      <div style={{display:"flex", gap:16, alignItems:"center", flexWrap:"wrap", marginBottom:10}}>
+      <div className="fx">
         <Control label="Distortion">
           <input type="range" min={0} max={1} step={0.01} value={distWet}
             onChange={(e)=>{ const v=parseFloat(e.target.value); setDistWet(v); if(distortionRef.current?.wet){distortionRef.current.wet.value=v;} }} />
@@ -331,19 +347,9 @@ export default function AstroSonar() {
         </Control>
       </div>
 
-      {/* Background image ONLY behind the sonar, perfectly centered & size-tunable */}
-      <div style={{
-        position: "relative",
-        width: "100%",
-        height: 750,
-        display: "grid",
-        placeItems: "center",
-        backgroundImage: `url(${bg})`,
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: BG_POS,
-        backgroundSize: `${BG_SIZE_PX}px auto`
-      }}>
-        <Scene angle={angle} />
+      {/* Background image ONLY behind the sonar */}
+      <div className="scene-wrapper">
+        <Scene angle={angle} houses={houses} />
       </div>
     </div>
   );
@@ -351,14 +357,14 @@ export default function AstroSonar() {
 
 function Control({ label, children }) {
   return (
-    <div style={{display:"flex", gap:8, alignItems:"center"}}>
-      <small style={{width:70, display:"inline-block"}}>{label}</small>
+    <div className="control">
+      <label>{label}</label>
       {children}
     </div>
   );
 }
 
-function Scene({ angle }) {
+function Scene({ angle, houses }) {
   const size = 600;
   const r = size * 0.38;
   const cx = size / 2;
@@ -368,9 +374,9 @@ function Scene({ angle }) {
   const toXY = (deg, rad) => { const a = degToRad(-deg + 90); return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)]; };
 
   return (
-    <svg viewBox={`0 0 ${size} ${size}`} style={{width:"100%", height:520}}>
+    <svg className="sonar" viewBox={`0 0 ${size} ${size}`}>
       {/* outer ring */}
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke={neon} strokeWidth={2}/>
+      <circle className="ring" cx={cx} cy={cy} r={r} />
 
       {/* zodiac glyphs — highlighted only in the active wedge */}
       {SIGNS.map((s)=>{
@@ -378,14 +384,13 @@ function Scene({ angle }) {
         const dist = Math.min(distRaw, 360 - distRaw);
         const within = dist <= wedgeWidth/2;
         const [gx, gy] = toXY(s.deg, r+30);
-        const fs = within ? 22 : 14;
-        return <text key={s.key} x={gx} y={gy} textAnchor="middle" fontSize={fs} fill={neon} opacity={within?1:0}>{s.glyph}</text>;
+        return <text key={s.key} x={gx} y={gy} textAnchor="middle" className={`zodiac-glyph ${within ? 'active' : ''}`}>{s.glyph}</text>;
       })}
 
       {/* houses */}
-      {HOUSES.map((h)=>{
+      {houses.map((h)=>{
         const [hx, hy] = toXY(h.deg, r+55);
-        return <text key={h.key} x={hx} y={hy} textAnchor="middle" fontSize={12} fill="white">{h.key}</text>;
+        return <text key={h.key} x={hx} y={hy} textAnchor="middle" className="house-label">{h.key}</text>;
       })}
 
       {/* planets */}
@@ -393,8 +398,8 @@ function Scene({ angle }) {
         const [px, py] = toXY(p.deg, r);
         return (
           <g key={p.key}>
-            <circle cx={px} cy={py} r={6} fill="black" stroke={neon} strokeWidth={2}/>
-            <text x={px} y={py-12} textAnchor="middle" fontSize={20} fill={neon}>{p.glyph}</text>
+            <circle className="planet-dot" cx={px} cy={py} r={6} />
+            <text className="planet-glyph" x={px} y={py-12} textAnchor="middle">{p.glyph}</text>
           </g>
         );
       })}
@@ -406,7 +411,7 @@ function Scene({ angle }) {
         const [x1,y1] = toXY(a1, r);
         const [x2,y2] = toXY(a2, r);
         const dW = `M${cx},${cy} L${x1},${y1} A${r},${r} 0 0 1 ${x2},${y2} Z`;
-        return (<path d={dW} fill={neon} opacity={0.15}/>);
+        return (<path className="wedge" d={dW}/>);
       })()}
 
       {/* curved sweep line with glow */}
@@ -416,9 +421,9 @@ function Scene({ angle }) {
         const d = `M${cx},${cy} Q${ctrlX},${ctrlY} ${sx},${sy}`;
         return (
           <g>
-            <path d={d} stroke={neon} strokeOpacity={0.1} strokeWidth={12} strokeLinecap="round" fill="none" />
-            <path d={d} stroke={neon} strokeOpacity={0.22} strokeWidth={6} strokeLinecap="round" fill="none" />
-            <path d={d} stroke={neon} strokeWidth={2} strokeLinecap="round" fill="none" />
+            <path className="sweep1" d={d} />
+            <path className="sweep2" d={d} />
+            <path className="sweep3" d={d} />
           </g>
         );
       })()}
