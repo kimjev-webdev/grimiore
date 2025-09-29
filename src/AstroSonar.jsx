@@ -310,7 +310,13 @@ export default function AstroSonar() {
     if (running) { baseTimeRef.current = null; prevAngleRef.current = baseAngleRef.current; }
   };
 
-  const tempoBadge = (x) => x === 60 ? "MEDITATE" : (x >= 100 && x <= 150 ? "WORK BITCH!" : (x >= 160 ? "BURNOUT" : "SLOW DOWN!"));
+ 
+const tempoBadge = (x) =>
+  x === 60 ? "MEDITATE" :
+  (x >= 100 && x <= 150 ? "WORK BITCH!" :
+  (x >= 160 ? "BURNOUT" :
+  (x > 150 ? "SLOW DOWN" : "FLOW")));
+
   const badgeClass = (x) => (x <= 90 ? "flow" : x <= 150 ? "work" : "rave");
 
   return (
