@@ -239,8 +239,140 @@ useEffect(() => {
   z-index: 0;
 }
 ```
+## 6
+Once the background was in place, I started thinking about time and pace. I set the initial BPM to 60, to my resting heart rate. As the dial accelerates, the BPM increases stepwise. I added a little reference to represent my states of being as the BPM increases. This became a metaphor for my own tendency to overwork myself — drifting from rest into intensity, then crashing. The sonar sweep embodied those cycles. The intensite of the sounds sweeping as the bpm increases really instills this concept. 
+
+60 bpm, meditate. 
+90–120 bpm, flow. 
+150 bpm, work bitch!
+180 bpm, burnout
+
+```
+const [bpm, setBpm] = useState(60); // start at resting heart rate
+const appRef = useRef(null);
+
+useEffect(() => {
+  const spb = 60 / bpm;
+  const rotDur = `${4 * spb}s`;
+  const hueDur = `${8 * spb}s`;
+  const el = appRef.current || document.documentElement;
+  el.style.setProperty('--bg-rot-dur', rotDur);
+  el.style.setProperty('--bg-hue-dur', hueDur);
+}, [bpm]);
+
+```
+
+## 7
+
+I enhanced the background with rotation & hue shifts.
+
+After I had the static background image working, I wanted to push it further. I experimented with keyframe animations to slowly rotate the image and cycle its hue. The results were psychoactive, almost hallucinatory, and brought the sonar alive in a way that surprised me.
+
+src/styles.css (excerpt)
+
+```
+.scene-wrapper::before {
+  /* ... */
+  filter: hue-rotate(0deg);
+  animation:
+    bg-rotate var(--bg-rot-dur, 16s) linear infinite,
+    bg-hue var(--bg-hue-dur, 32s) linear infinite;
+  animation-play-state: var(--bg-anim-state, running);
+}
+
+@keyframes bg-rotate { to { transform: rotate(360deg); } }
+@keyframes bg-hue    { to { filter: hue-rotate(360deg); } }
+```
+
+This stage was thrilling. The combination of my hand-drawn radial pattern with tempo-driven movement and hue cycling transformed the whole piece. It started to feel like a psychedelic astrological instrument, which was both personal and culturally resonant.
+
+## 8
+
+Once the sonar, background, tempo logic, and animations were in place, I needed to make the project live so I could share it in the Online Studio and with my tutors/peers. I wanted a process where I could just push code and have the site update automatically.  Deployment was the moment my self-portrait became public. It shifted from a private experiment in abstraction to something viewable, remixable, and alive on the web.
+
+To do that, I set up GitHub Pages with Actions:
+Every push to the main branch triggers a workflow.
+
+The workflow installs dependencies, builds the Vite project, and publishes the output (dist/) to GitHub Pages.
+Pages then serves the site from the gh-pages branch.
+
+This meant I didn’t have to manually rebuild or drag files around. Deployment is the finishing point to the creative flow.
+
+.github/workflows/deploy.yml
+
+```
+name: Deploy Vite site to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+And because GitHub Pages serves from a subpath, I added a base to my Vite config:
+
+vite.config.js :
+
+```
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/grimiore/',  // matches repo name
+})
+```
 
 
+## Conclusion
+
+This project began with a simple brief: “Who am I?” In Week 1, I answered somewhat literally; through referncing my own illustration methods, selfies, collage, and halftone experiments that became “My Big 3.” I
+
+n Week 2, I expanded: I started thinking about how to quantify the qualitative. I wanted to illustrate myself not just with images, but with data, patterns, and sound.
+
+That search led me here: Finding Myself (Astro Sonar). A creativley coded self-portrait that sweeps like a sonar, crossing my planets and sounding them as signals. It began as an abstract thought experiment, but once I added the background drawing from Week 2, it transformed into something cohesive; referencing both my personal imagery and the psychedelic, astrological visual traditions of the 1960s (which I love!).
+
+The tempo arc (resting heartbeat → overdrive → burnout) became a metaphor for my own rhythms of life and work. The psychoactive visuals gave it a hallucinatory edge, reminding me that identity is not static but constantly in motion, refracted through cycles.
+
+Finally, by deploying it with GitHub Pages, I made this portrait public and alive. It’s no longer a static image but a moving, sounding, generative outcome...a digital glyph for my endless self-searching.
+
+What began as “make a portrait” became a layered exploration:
+
+Narrative + astrology for meaning,
+Code + animation for structure,
+Sound + tempo for embodiment,
+Deployment for presence.
+
+This project doesn’t just say “who I am” it enacts the process of finding myself.
 
 
 
